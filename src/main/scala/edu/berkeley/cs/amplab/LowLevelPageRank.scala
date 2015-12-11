@@ -116,14 +116,15 @@ object LowLevelPageRank {
             }
             contribs.iterator
         }
-      }.reduceByKey(vertexPartitioner, _ + _).zipPartitions(ranks, preservesPartitioning = true) {
+      }.partitionBy(vertexPartitioner).zipPartitions(ranks, preservesPartitioning = true) {
         (contribIter, rankPartIter) => rankPartIter.map {
           case (map, attrs) =>
-            val newAttrs = new Array[Double](attrs.size)
+            val totalContribs = new Array[Double](attrs.size)
             contribIter.foreach {
               case (id, contrib) =>
-                newAttrs(map(id)) = 0.15 + 0.85 * contrib
+                totalContribs(map(id)) += contrib
             }
+            val newAttrs = totalContribs.map(c => 0.15 + 0.85 * c)
             (map, newAttrs)
         }
       }
