@@ -8,9 +8,9 @@ scalaVersion := "2.10.4"
 
 licenses += "Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0.html")
 
-libraryDependencies += "org.apache.spark" %% "spark-core" % "1.6.0-SNAPSHOT"
+libraryDependencies += "org.apache.spark" %% "spark-core" % "1.6.0" % "provided"
 
-libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.6.0-SNAPSHOT"
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.6.0" % "provided"
 
 scalacOptions ++= Seq(
   "-deprecation",
