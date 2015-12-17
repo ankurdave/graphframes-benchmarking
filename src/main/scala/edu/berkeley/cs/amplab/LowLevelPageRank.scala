@@ -18,55 +18,53 @@ object LowLevelPageRank {
     val sc = new SparkContext(conf)
 
     val rawEdges = sc.textFile(file)
-    val numEdgePartitions = rawEdges.partitions.length
-    val edgePartitioner = new HashPartitioner(numEdgePartitions)
+    val numEdgePartitions = 200
+    val partitioner = new HashPartitioner(200)
     val edges = rawEdges
-      .mapPartitionsWithIndex { (pid, lines) =>
+      .flatMap { line =>
+        if (!line.startsWith("#")) {
+          val fields = line.split('\t')
+          Some((fields(0).toLong, fields(1).toLong))
+        } else {
+          None
+        }
+      }
+      .partitionBy(partitioner)
+      .mapPartitionsWithIndex({ (pid, edges) =>
         val srcIds = ArrayBuilder.make[Long]
         val dstIds = ArrayBuilder.make[Long]
-        for (line <- lines) {
-          if (!line.startsWith("#")) {
-            val fields = line.split('\t')
-            srcIds += fields(0).toLong
-            dstIds += fields(1).toLong
-          }
+        for (edge <- edges) {
+          srcIds += edge._1
+          dstIds += edge._2
         }
         val srcIdsArr = srcIds.result
         val dstIdsArr = dstIds.result
         new Sorter(sdf).sort((srcIdsArr, dstIdsArr), 0, srcIdsArr.size, ord)
         val dataArr = Array.fill(srcIdsArr.size) { 1.0 }
         Iterator((pid, (srcIdsArr, dstIdsArr, dataArr)))
-      }.partitionBy(edgePartitioner)
+      }, true)
     time("build edges") {
       edges.setName("edges").cache().count
     }
 
-    val vertexPartitioner = new HashPartitioner(200)
-    val routingTables = edges.mapPartitions(_.flatMap {
-      case (pid, (srcIds, dstIds, data)) =>
-        RoutingTablePartition.edgePartitionToMsgs(pid, srcIds, dstIds)
-    }).partitionBy(vertexPartitioner).mapPartitions(
-      iter => Iterator(RoutingTablePartition.fromMsgs(numEdgePartitions, iter)),
-      preservesPartitioning = true)
-    time("build routing tables") {
-      routingTables.setName("routingTables").cache().count
-    }
-
-    val vertices = routingTables.mapPartitions({ routingTableIter =>
-      val routingTable =
-        if (routingTableIter.hasNext) routingTableIter.next() else RoutingTablePartition.empty
-      val map = HashMap.empty[Long, Int]
-      val attrs = ArrayBuilder.make[Double]
-      var i = 0
-      for (id <- routingTable.iterator) {
-        if (!map.contains(id)) {
-          map.update(id, i)
-          attrs += 1.0
-          i += 1
+    val vertices = edges.mapPartitions(_.flatMap {
+      case (_, (srcIdsArr, dstIdsArr, _)) =>
+        (srcIdsArr.iterator ++ dstIdsArr.iterator).map(id => (id, 1))
+      })
+      .partitionBy(partitioner)
+      .mapPartitions({ idIter =>
+        val map = HashMap.empty[Long, Int]
+        val attrs = ArrayBuilder.make[Double]
+        var i = 0
+        for ((id, _) <- idIter) {
+          if (!map.contains(id)) {
+            map.update(id, i)
+            attrs += 1.0
+            i += 1
+          }
         }
-      }
-      Iterator((map, attrs.result))
-    }, preservesPartitioning = true)
+        Iterator((map, attrs.result))
+      }, preservesPartitioning = true)
     time("build vertices") {
       vertices.setName("vertices").cache().count
     }
@@ -74,49 +72,26 @@ object LowLevelPageRank {
     var ranks = vertices
 
     for (i <- 1 to iters) {
-      val shippedRanks =
-        ranks.zipPartitions(routingTables, preservesPartitioning = true) {
-          (vIter, rtIter) => vIter.flatMap {
-            case (map, attrs) => rtIter.flatMap { rt =>
-              Iterator.tabulate(rt.numEdgePartitions) { pid =>
-                val blockIds = ArrayBuilder.make[Long]
-                val blockAttrs = ArrayBuilder.make[Double]
-                rt.foreachWithinEdgePartition(pid, true, false) { id =>
-                  blockIds += id
-                  blockAttrs += attrs(map(id))
-                  ()
-                }
-                (pid, new VertexAttributeBlock(blockIds.result, blockAttrs.result))
-              }
-            }
-          }
-        }.partitionBy(edgePartitioner)
-      val newRanks = edges.zipPartitions(shippedRanks) {
-        (ePartIter, shippedVertBlockIter) => ePartIter.flatMap {
-          case (pid, (srcIds, dstIds, data)) =>
-            val ranks = HashMap.empty[Long, Double]
+      val newRanks = edges.zipPartitions(ranks) {
+        (ePartIter, vPartIter) => vPartIter.flatMap {
+          case (map, ranks) =>
             val contribs = HashMap.empty[Long, Double]
-            shippedVertBlockIter.foreach {
-              case (_, shippedVertBlock) =>
+            ePartIter.foreach {
+              case (pid, (srcIds, dstIds, data)) =>
                 var i = 0
-                while (i < shippedVertBlock.ids.size) {
-                  ranks.update(shippedVertBlock.ids(i), shippedVertBlock.attrs(i))
+                while (i < srcIds.size) {
+                  val contrib = srcIds(i) * data(i)
+                  if (contribs.contains(dstIds(i))) {
+                    contribs(dstIds(i)) += contrib
+                  } else {
+                    contribs(dstIds(i)) = contrib
+                  }
                   i += 1
                 }
             }
-            var i = 0
-            while (i < srcIds.size) {
-              val contrib = srcIds(i) * data(i)
-              if (contribs.contains(dstIds(i))) {
-                contribs(dstIds(i)) += contrib
-              } else {
-                contribs(dstIds(i)) = contrib
-              }
-              i += 1
-            }
             contribs.iterator
         }
-      }.partitionBy(vertexPartitioner).zipPartitions(ranks, preservesPartitioning = true) {
+      }.partitionBy(partitioner).zipPartitions(ranks, preservesPartitioning = true) {
         (contribIter, rankPartIter) => rankPartIter.map {
           case (map, attrs) =>
             val totalContribs = new Array[Double](attrs.size)
@@ -194,11 +169,4 @@ object LowLevelPageRank {
     println(s"$desc: ${(System.nanoTime - start) / 1000000.0} ms")
     result
   }
-}
-
-/** Stores vertex attributes to ship to an edge partition. */
-class VertexAttributeBlock(val ids: Array[Long], val attrs: Array[Double])
-  extends Serializable {
-  def iterator: Iterator[(Long, Double)] =
-    (0 until ids.size).iterator.map { i => (ids(i), attrs(i)) }
 }
