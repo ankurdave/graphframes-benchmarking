@@ -15,6 +15,10 @@ object LowLevelPageRank {
     val file = args(1)
 
     val conf = new SparkConf().setAppName("LowLevelPageRank")
+    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+    conf.registerKryoClasses(Array(
+      classOf[(Long, Double)],
+      classOf[RoutingTablePartition.RoutingTableMessage]))
     val sc = new SparkContext(conf)
 
     val rawEdges = sc.textFile(file)
@@ -197,8 +201,4 @@ object LowLevelPageRank {
 }
 
 /** Stores vertex attributes to ship to an edge partition. */
-class VertexAttributeBlock(val ids: Array[Long], val attrs: Array[Double])
-  extends Serializable {
-  def iterator: Iterator[(Long, Double)] =
-    (0 until ids.size).iterator.map { i => (ids(i), attrs(i)) }
-}
+class VertexAttributeBlock(val ids: Array[Long], val attrs: Array[Double]) extends Serializable
