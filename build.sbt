@@ -12,6 +12,8 @@ libraryDependencies += "org.apache.spark" %% "spark-core" % "1.6.0" % "provided"
 
 libraryDependencies += "org.apache.spark" %% "spark-sql" % "1.6.0" % "provided"
 
+libraryDependencies += "com.google.guava" % "guava" % "14.0.1"
+
 scalacOptions ++= Seq(
   "-deprecation",
   "-encoding", "UTF-8",
