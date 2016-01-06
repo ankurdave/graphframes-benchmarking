@@ -36,9 +36,9 @@ object LowLevelPageRank {
         new Sorter(sdf).sort((srcIdsArr, dstIdsArr), 0, srcIdsArr.size, ord)
         val dataArr = Array.fill(srcIdsArr.size) { 1.0 }
         Iterator((pid, (srcIdsArr, dstIdsArr, dataArr)))
-      }.partitionBy(edgePartitioner)
+      }.partitionBy(edgePartitioner).setName("edges").cache()
     time("build edges") {
-      edges.setName("edges").cache().count
+      edges.count
     }
 
     val vertexPartitioner = new HashPartitioner(200)
@@ -47,9 +47,9 @@ object LowLevelPageRank {
         RoutingTablePartition.edgePartitionToMsgs(pid, srcIds, dstIds)
     }).partitionBy(vertexPartitioner).mapPartitions(
       iter => Iterator(RoutingTablePartition.fromMsgs(numEdgePartitions, iter)),
-      preservesPartitioning = true)
+      preservesPartitioning = true).setName("routingTables").cache()
     time("build routing tables") {
-      routingTables.setName("routingTables").cache().count
+      routingTables.count
     }
 
     val vertices = routingTables.mapPartitions({ routingTableIter =>
@@ -66,9 +66,9 @@ object LowLevelPageRank {
         }
       }
       Iterator((map, attrs.result))
-    }, preservesPartitioning = true)
+    }, preservesPartitioning = true).setName("vertices").cache()
     time("build vertices") {
-      vertices.setName("vertices").cache().count
+      vertices.count
     }
 
     var ranks = vertices
@@ -127,9 +127,9 @@ object LowLevelPageRank {
             val newAttrs = totalContribs.map(c => 0.15 + 0.85 * c)
             (map, newAttrs)
         }
-      }
+      }.setName("ranks after iteration " + i).cache()
       time("iteration " + i) {
-        newRanks.setName("ranks after iteration " + i).cache().count
+        newRanks.count
       }
       ranks.unpersist()
       ranks = newRanks
