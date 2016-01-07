@@ -55,6 +55,8 @@ object DataFramePageRank {
         .agg(sum("contrib").as("totalContrib"))
         .select($"dst_id".as("id"), (lit(0.15) + lit(0.85) * $"totalContrib").as("rank"))
 
+      newRanks.explain(true)
+
       time("iteration " + i) {
         newRanks.cache().count
       }
