@@ -34,14 +34,17 @@ object DataFramePageRank {
             None
           }
       }.toDF("src_id", "dst_id", "weight")
-      .repartition($"src_id")//.sortWithinPartitions($"src_id", $"dst_id")
+//      .repartition($"src_id").sortWithinPartitions($"src_id", $"dst_id")
+      .sort($"src_id", $"dst_id")
     time("build edges") {
       edges.cache()//.count
     }
 
     val vertices = edges.explode($"src_id", $"dst_id") {
       case Row(srcId: Long, dstId: Long) => Seq(VertexId(srcId), VertexId(dstId))
-    }.distinct().select($"id", lit(1.0).as("rank")).repartition($"id")
+    }.distinct().select($"id", lit(1.0).as("rank"))
+    //.repartition($"id")
+      .sort($"id")
     time("build vertices") {
       vertices.cache()//.count
     }
