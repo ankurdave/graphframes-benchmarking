@@ -34,28 +34,27 @@ object DataFramePageRank {
             None
           }
       }.toDF("src_id", "dst_id", "weight")
-      .repartition($"src_id")//.sortWithinPartitions($"src_id", $"dst_id")
+      .repartition($"src_id").sortWithinPartitions($"src_id")
     time("build edges") {
-      edges.cache()//.count
+      edges.cache().count
     }
 
     val vertices = edges.explode($"src_id", $"dst_id") {
       case Row(srcId: Long, dstId: Long) => Seq(VertexId(srcId), VertexId(dstId))
-    }.distinct().select($"id", lit(1.0).as("rank")).repartition($"id")
+    }.distinct().repartition($"id").sortWithinPartitions($"id").select($"id", lit(1.0).as("rank"))
     time("build vertices") {
-      vertices.cache()//.count
+      vertices.cache().count
     }
 
     var ranks = vertices
 
     for (i <- 1 to iters) {
       val newRanks = edges.join(ranks, $"src_id" === $"id")
-        .select($"dst_id", ($"weight" * $"rank").as("contrib"))
-        .groupBy($"dst_id")
+        .select($"dst_id".as("id"), ($"weight" * $"rank").as("contrib"))
+        .groupBy($"id")
         .agg(sum("contrib").as("totalContrib"))
-        .select($"dst_id".as("id"), (lit(0.15) + lit(0.85) * $"totalContrib").as("rank"))
-
-      newRanks.explain(true)
+        .select($"id", (lit(0.15) + lit(0.85) * $"totalContrib").as("rank"))
+        .sortWithinPartitions($"id")
 
       time("iteration " + i) {
         newRanks.cache().count
